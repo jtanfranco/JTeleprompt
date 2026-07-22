@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Teleprompter</title>
+<style>
+  :root{
+    --stage:#0B0B0D; --panel:#15151A; --panel-2:#1D1D24; --line:#2C2C34;
+    --ink:#F2F0EB; --muted:#8B8B95; --accent:#F5C542;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--stage);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    overflow:hidden;-webkit-font-smoothing:antialiased}
+
+  #app{display:flex;height:100vh;width:100vw}
+
+  /* Stage */
+  #stage{position:relative;flex:1;min-width:0;height:100%;overflow:hidden}
+  #scroll{will-change:transform;white-space:pre-wrap;word-wrap:break-word;line-height:1.5;font-weight:600;letter-spacing:.005em}
+  #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--muted);text-align:center;padding:0 32px;pointer-events:none}
+  #empty .big{font-size:19px;color:var(--ink);font-weight:600}
+  #empty span{font-size:15px;font-weight:500}
+  #progress{position:absolute;top:0;left:0;height:2px;width:0;background:var(--accent);opacity:.5;z-index:15;transition:width .1s linear}
+
+  /* Lens marker */
+  #marker{position:absolute;left:0;right:0;height:0;pointer-events:none;z-index:5;--marker-color:#F5C542}
+  #marker .rule{position:absolute;left:0;right:0;top:0;height:2px;background:linear-gradient(90deg,transparent,var(--marker-color) 12%,var(--marker-color) 88%,transparent)}
+  #marker .reticle{position:absolute;left:50%;top:0;width:34px;height:34px;transform:translate(-50%,-50%);border:2px solid var(--marker-color);border-radius:50%}
+  #marker .reticle::before,#marker .reticle::after{content:"";position:absolute;background:var(--marker-color)}
+  #marker .reticle::before{left:50%;top:-9px;width:2px;height:8px;transform:translateX(-50%)}
+  #marker .reticle::after{left:50%;bottom:-9px;width:2px;height:8px;transform:translateX(-50%)}
+  #marker .bracket{position:absolute;top:-7px;width:9px;height:16px;border:2px solid var(--marker-color)}
+  #marker .bracket.l{left:16px;border-right:none}
+  #marker .bracket.r{right:16px;border-left:none}
+
+  /* Present-mode floating bar */
+  #quickbar{position:absolute;left:50%;bottom:26px;transform:translateX(-50%);display:flex;align-items:center;gap:8px;
+    background:rgba(21,21,26,.86);backdrop-filter:blur(12px);border:1px solid var(--line);border-radius:14px;padding:8px;z-index:20;
+    box-shadow:0 8px 30px rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .25s}
+  body.present:not(.ui-hidden) #quickbar{opacity:1;pointer-events:auto}
+  body.present.ui-hidden{cursor:none}
+
+  .qbtn{display:flex;align-items:center;justify-content:center;height:40px;min-width:40px;padding:0 12px;
+    background:var(--panel-2);border:1px solid var(--line);border-radius:10px;color:var(--ink);font-size:13px;font-weight:600;cursor:pointer;user-select:none;transition:background .12s}
+  .qbtn:hover{background:#26262f}
+  .qbtn:active{transform:translateY(1px)}
+  .qbtn.primary{background:var(--accent);color:#1a1400;border-color:var(--accent);min-width:96px}
+  .qbtn.primary:hover{background:#ffd75a}
+  .qbtn svg{width:18px;height:18px;fill:currentColor}
+  .qsep{width:1px;height:24px;background:var(--line);margin:0 2px}
+
+  /* Popped-out notice (prompter window) */
+  #poppedbar{position:absolute;top:16px;left:50%;transform:translateX(-50%);display:none;align-items:center;gap:12px;
+    background:rgba(21,21,26,.92);border:1px solid var(--line);border-radius:12px;padding:8px 8px 8px 14px;z-index:25;font-size:13px;color:var(--muted)}
+  body.popped #poppedbar{display:flex}
+
+  /* Sidebar */
+  #panel{width:clamp(300px,28vw,360px);flex-shrink:0;height:100%;background:var(--panel);border-left:1px solid var(--line);display:flex;flex-direction:column}
+  body.present #panel,body.popped #panel{display:none}
+
+  .panel-head{padding:16px 20px 14px;border-bottom:1px solid var(--line)}
+  .head-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+  .panel-head h1{font-size:15px;font-weight:700;letter-spacing:.02em}
+  .panel-head p{font-size:12px;color:var(--muted);margin-top:3px}
+  .ghost{background:var(--panel-2);border:1px solid var(--line);color:var(--ink);border-radius:9px;padding:7px 11px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background .12s}
+  .ghost:hover{background:#2a2a33}
+  #popinBtn{display:none}
+  body.as-controls #popinBtn{display:inline-flex}
+  body.as-controls #popoutBtn{display:none}
+  .popnote{font-size:11.5px;color:var(--accent);margin-top:10px;display:none}
+  .popnote.show{display:block}
+
+  .panel-body{overflow-y:auto;padding:18px 20px 24px;flex:1}
+  .panel-foot{padding:14px 20px;border-top:1px solid var(--line);display:flex;gap:10px}
+
+  .field{margin-bottom:20px}
+  .field label{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;font-weight:600;color:var(--muted);letter-spacing:.03em;text-transform:uppercase;margin-bottom:9px}
+  .field .val{color:var(--accent);font-variant-numeric:tabular-nums;font-size:12px}
+
+  textarea{width:100%;height:140px;resize:vertical;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;color:var(--ink);padding:12px;font-size:14px;line-height:1.55;font-family:inherit}
+  textarea:focus{outline:none;border-color:var(--accent)}
+  textarea::placeholder{color:#5a5a63}
+
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:4px;border-radius:4px;background:var(--line);outline:none;cursor:pointer}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:18px;height:18px;border-radius:50%;background:var(--accent);cursor:pointer;border:3px solid var(--panel);box-shadow:0 0 0 1px var(--accent)}
+  input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);cursor:pointer;border:3px solid var(--panel)}
+
+  .swatches{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .sw{width:26px;height:26px;border-radius:50%;background:var(--sw);border:2px solid var(--line);cursor:pointer;padding:0;position:relative}
+  .sw.active{outline:2px solid var(--ink);outline-offset:2px;border-color:transparent}
+  .sw.custom{overflow:hidden;background:conic-gradient(#ff453a,#f5c542,#34d058,#22d3ee,#7c6bff,#ff54c8,#ff453a);display:flex;align-items:center;justify-content:center}
+  .sw.custom input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%;border:none;padding:0}
+
+  .toggle-row{display:flex;gap:10px}
+  .toggle{flex:1;display:flex;align-items:center;justify-content:center;padding:11px;border-radius:10px;background:var(--panel-2);border:1px solid var(--line);color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;transition:.12s}
+  .toggle.on{background:rgba(245,197,66,.16);border-color:var(--accent);color:var(--accent)}
+
+  .divider{height:1px;background:var(--line);margin:4px 0 20px}
+  .hint{font-size:11.5px;color:var(--muted);line-height:1.7;border-top:1px solid var(--line);padding-top:16px;margin-top:4px}
+  .hint b{color:var(--ink);font-weight:600}
+  kbd{background:var(--panel-2);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:1px 6px;font-size:11px;font-family:inherit;color:var(--ink)}
+
+  /* Controls-only window */
+  body.as-controls #stage{display:none}
+  body.as-controls #panel{width:100vw;height:100vh;border-left:none}
+
+  @media (max-width:560px){
+    #panel{width:100%}
+    #stage{display:none}
+    body.present #stage,body.popped #stage{display:block}
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="stage">
+    <div id="progress"></div>
+    <div id="scroll"></div>
+    <div id="empty">
+      <span class="big">Your script goes here</span>
+      <span>Paste your text in the panel, then press Play</span>
+    </div>
+    <div id="marker">
+      <div class="rule"></div><div class="bracket l"></div><div class="bracket r"></div><div class="reticle"></div>
+    </div>
+    <div id="poppedbar">
+      <span>Controls are in a separate window</span>
+      <button class="qbtn" id="poppedIn">Pop back in</button>
+    </div>
+    <div id="quickbar">
+      <button class="qbtn primary" id="qPlay"><svg id="qPlayIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg><span id="qPlayLabel">Pause</span></button>
+      <button class="qbtn" id="qRestart" title="Restart (R)"><svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg></button>
+      <div class="qsep"></div>
+      <button class="qbtn" id="qSlow" title="Slower">–</button>
+      <button class="qbtn" id="qFast" title="Faster">+</button>
+      <div class="qsep"></div>
+      <button class="qbtn" id="qEdit" title="Back to editor (E)">Edit</button>
+    </div>
+  </div>
+
+  <aside id="panel">
+    <div class="panel-head">
+      <div class="head-row">
+        <div><h1>Teleprompter</h1><p>Set up your script, then press Play.</p></div>
+        <div>
+          <button class="ghost" id="popoutBtn" title="Open controls in a second window">&#9106; Pop out</button>
+          <button class="ghost" id="popinBtn" title="Return controls to the main window">&#9106; Pop in</button>
+        </div>
+      </div>
+      <div class="popnote" id="popNote"></div>
+    </div>
+
+    <div class="panel-body">
+      <div class="field">
+        <label>Script <span class="val" id="wordCount">0 words</span></label>
+        <textarea id="text" placeholder="Paste your script here…"></textarea>
+      </div>
+      <div class="divider"></div>
+      <div class="field"><label>Scroll speed <span class="val" id="speedVal">60</span></label><input type="range" id="speed" min="10" max="300" value="60" step="5"></div>
+      <div class="field"><label>Text size <span class="val" id="sizeVal">48 px</span></label><input type="range" id="size" min="20" max="140" value="48" step="1"></div>
+      <div class="field"><label>Left / right margin <span class="val" id="hmarginVal">8 %</span></label><input type="range" id="hmargin" min="0" max="40" value="8" step="1"></div>
+      <div class="field"><label>Top / bottom margin <span class="val" id="vmarginVal">45 %</span></label><input type="range" id="vmargin" min="0" max="90" value="45" step="1"></div>
+      <div class="divider"></div>
+      <div class="field"><label>Lens marker position <span class="val" id="markerPosVal">42 %</span></label><input type="range" id="markerPos" min="5" max="90" value="42" step="1"></div>
+      <div class="field">
+        <label>Lens marker color</label>
+        <div class="swatches" id="swatches">
+          <button class="sw" data-c="#F5C542" style="--sw:#F5C542"></button>
+          <button class="sw" data-c="#FF453A" style="--sw:#FF453A"></button>
+          <button class="sw" data-c="#34D058" style="--sw:#34D058"></button>
+          <button class="sw" data-c="#22D3EE" style="--sw:#22D3EE"></button>
+          <button class="sw" data-c="#FFFFFF" style="--sw:#FFFFFF"></button>
+          <button class="sw" data-c="#FF54C8" style="--sw:#FF54C8"></button>
+          <label class="sw custom" title="Custom color"><input type="color" id="markerColorCustom" value="#F5C542"></label>
+        </div>
+      </div>
+      <div class="field"><label>Lens marker opacity <span class="val" id="markerOpacityVal">90 %</span></label><input type="range" id="markerOpacity" min="10" max="100" value="90" step="5"></div>
+      <div class="field">
+        <label>Display</label>
+        <div class="toggle-row"><div class="toggle on" id="markerToggle">Lens marker</div><div class="toggle" id="mirrorToggle">Mirror flip</div></div>
+      </div>
+      <div class="hint">
+        <b>Pop out</b> opens these controls in their own window — put it on a second monitor while the prompter fills the first.<br><br>
+        <kbd>Space</kbd> play / pause &nbsp; <kbd>↑</kbd><kbd>↓</kbd> speed &nbsp; <kbd>R</kbd> restart<br>
+        <b>Mirror flip</b> is for rigs that reflect the screen off angled glass.
+      </div>
+    </div>
+
+    <div class="panel-foot">
+      <button class="qbtn primary" id="sidebarPlay" style="flex:1"><svg id="sPlayIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg><span id="sPlayLabel">Play</span></button>
+      <button class="qbtn" id="sidebarRestart" title="Restart"><svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg></button>
+    </div>
+  </aside>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  var role = (location.hash === '#controls') ? 'controls' : 'main';
+  var body = document.body;
+  var el = function(id){ return document.getElementById(id); };
+
+  var stage=el('stage'), scroll=el('scroll'), empty=el('empty'), marker=el('marker'),
+      progress=el('progress'), textarea=el('text');
+
+  var state = {
+    playing:false, pos:0,
+    speed:60, size:48, hmargin:8, vmargin:45,
+    markerPos:42, markerOn:true, mirror:false,
+    markerColor:'#F5C542', markerOpacity:90, text:''
+  };
+  var SYNC = ['speed','size','hmargin','vmargin','markerPos','markerOn','mirror','markerColor','markerOpacity','text','playing'];
+
+  var controlsWin=null, closePoll=null;
+  var PLAY='M8 5v14l11-7z', PAUSE='M6 5h4v14H6zM14 5h4v14h-4z';
+  var isPresent=function(){ return body.classList.contains('present'); };
+  var isPopped =function(){ return body.classList.contains('popped'); };
+
+  /* ---------- messaging ---------- */
+  function pushControls(patch){ if(controlsWin && !controlsWin.closed) controlsWin.postMessage({__tp:1,type:'state',state:patch},'*'); }
+  function pushMain(patch){ if(window.opener) window.opener.postMessage({__tp:1,type:'patch',patch:patch},'*'); }
+  function pushCmd(cmd){ if(window.opener) window.opener.postMessage({__tp:1,type:'cmd',cmd:cmd},'*'); }
+  function snapshot(){ var o={}; SYNC.forEach(function(k){ o[k]=state[k]; }); return o; }
+
+  window.addEventListener('message', function(e){
+    var d=e.data; if(!d||!d.__tp) return;
+    if(role==='main'){
+      if(d.type==='ready'){ controlsWin=e.source; pushControls(snapshot()); }
+      else if(d.type==='patch'){ applyIncoming(d.patch); }
+      else if(d.type==='cmd'){ if(d.cmd==='restart') doRestart(); else if(d.cmd==='popin') popIn(); }
+    } else {
+      if(d.type==='state'){ applyIncoming(d.state); }
+    }
+  });
+
+  /* ---------- rendering ---------- */
+  function renderPrompter(){
+    scroll.textContent = state.text;
+    empty.style.display = state.text.trim() ? 'none' : 'flex';
+    scroll.style.fontSize = state.size+'px';
+    scroll.style.padding = state.vmargin+'vh '+state.hmargin+'%';
+    marker.style.display = state.markerOn ? 'block' : 'none';
+    marker.style.top = state.markerPos+'%';
+    marker.style.setProperty('--marker-color', state.markerColor);
+    marker.style.opacity = state.markerOpacity/100;
+    drawTransform();
+  }
+  function maxScroll(){ return Math.max(0, scroll.scrollHeight - stage.clientHeight); }
+  function drawTransform(){
+    scroll.style.transform='translateY('+(-state.pos)+'px)'+(state.mirror?' scaleX(-1)':'');
+    var m=maxScroll(); progress.style.width=(m>0?Math.min(100,state.pos/m*100):0)+'%';
+  }
+
+  /* reflect state into this window's control DOM */
+  function syncDOM(){
+    el('speed').value=state.speed; el('speedVal').textContent=state.speed;
+    el('size').value=state.size; el('sizeVal').textContent=state.size+' px';
+    el('hmargin').value=state.hmargin; el('hmarginVal').textContent=state.hmargin+' %';
+    el('vmargin').value=state.vmargin; el('vmarginVal').textContent=state.vmargin+' %';
+    el('markerPos').value=state.markerPos; el('markerPosVal').textContent=state.markerPos+' %';
+    el('markerOpacity').value=state.markerOpacity; el('markerOpacityVal').textContent=state.markerOpacity+' %';
+    el('markerToggle').classList.toggle('on',state.markerOn);
+    el('mirrorToggle').classList.toggle('on',state.mirror);
+    el('markerColorCustom').value=state.markerColor; updateSwatchActive();
+    if(document.activeElement!==textarea && textarea.value!==state.text) textarea.value=state.text;
+    var w=state.text.trim()?state.text.trim().split(/\s+/).length:0;
+    el('wordCount').textContent=w+(w===1?' word':' words');
+    var lbl=state.playing?'Pause':'Play', d=state.playing?PAUSE:PLAY;
+    el('sPlayLabel').textContent=lbl; el('qPlayLabel').textContent=lbl;
+    el('sPlayIcon').querySelector('path').setAttribute('d',d);
+    el('qPlayIcon').querySelector('path').setAttribute('d',d);
+  }
+
+  /* ---------- change flow ---------- */
+  function change(patch){
+    for(var k in patch) state[k]=patch[k];
+    syncDOM();
+    if(role==='main'){ renderPrompter(); pushControls(patch); }
+    else pushMain(patch);
+  }
+  function applyIncoming(patch){
+    for(var k in patch) state[k]=patch[k];
+    syncDOM();
+    if(role==='main') renderPrompter();
+  }
+
+  /* ---------- scroll loop (main only) ---------- */
+  var last=null;
+  function loop(t){
+    if(last===null) last=t;
+    var dt=(t-last)/1000; last=t;
+    if(state.playing){
+      state.pos += state.speed*dt;
+      var m=maxScroll();
+      if(state.pos>=m){ state.pos=m; mainSetPlaying(false); showControls(); }
+      drawTransform();
+    }
+    requestAnimationFrame(loop);
+  }
+
+  /* ---------- play / present ---------- */
+  function mainSetPlaying(v){ state.playing=v; last=null; syncDOM(); pushControls({playing:v}); }
+  function startPresentation(){ body.classList.add('present'); mainSetPlaying(true); renderPrompter(); showControls(); }
+  function exitPresent(){ mainSetPlaying(false); body.classList.remove('present','ui-hidden'); clearHide(); }
+  function mainTogglePlay(){ mainSetPlaying(!state.playing); showControls(); }
+  function doRestart(){ state.pos=0; drawTransform(); }
+
+  /* controls-auto-hide (present mode) */
+  var hideTimer=null;
+  function clearHide(){ if(hideTimer){clearTimeout(hideTimer);hideTimer=null;} }
+  function showControls(){
+    body.classList.remove('ui-hidden'); clearHide();
+    if(isPresent() && state.playing) hideTimer=setTimeout(function(){ body.classList.add('ui-hidden'); },2500);
+  }
+  document.addEventListener('mousemove', function(){ if(isPresent()) showControls(); });
+
+  /* ---------- pop out / in ---------- */
+  function note(msg){ var n=el('popNote'); n.textContent=msg; n.classList.add('show'); setTimeout(function(){ n.classList.remove('show'); },6000); }
+  function popOut(){
+    if(role!=='main') return;
+    body.classList.remove('present','ui-hidden');
+    controlsWin = window.open(location.href.split('#')[0]+'#controls','tp_controls','width=460,height=880');
+    if(!controlsWin){ note('Popup blocked. Download this file and open it in a browser, then allow popups.'); return; }
+    body.classList.add('popped');
+    if(closePoll) clearInterval(closePoll);
+    closePoll=setInterval(function(){ if(!controlsWin||controlsWin.closed) popIn(); },600);
+  }
+  function popIn(){
+    if(closePoll){ clearInterval(closePoll); closePoll=null; }
+    if(controlsWin && !controlsWin.closed) controlsWin.close();
+    controlsWin=null; body.classList.remove('popped');
+  }
+
+  /* ---------- buttons ---------- */
+  el('popoutBtn').addEventListener('click', popOut);
+  el('popinBtn').addEventListener('click', function(){ window.close(); });
+  el('poppedIn').addEventListener('click', popIn);
+
+  el('sidebarPlay').addEventListener('click', function(){
+    if(role==='controls'){ change({playing:!state.playing}); }
+    else if(isPopped()){ mainTogglePlay(); }
+    else { startPresentation(); }
+  });
+  el('sidebarRestart').addEventListener('click', function(){ role==='controls' ? pushCmd('restart') : doRestart(); });
+
+  el('qPlay').addEventListener('click', function(){ mainTogglePlay(); });
+  el('qRestart').addEventListener('click', doRestart);
+  el('qEdit').addEventListener('click', exitPresent);
+  el('qSlow').addEventListener('click', function(){ setSpeed(state.speed-10); });
+  el('qFast').addEventListener('click', function(){ setSpeed(state.speed+10); });
+
+  stage.addEventListener('click', function(e){
+    if(role!=='main') return;
+    if(!isPresent() && !isPopped()) return;
+    if(e.target.closest('#quickbar')||e.target.closest('#poppedbar')) return;
+    mainTogglePlay();
+  });
+
+  /* ---------- sliders ---------- */
+  function bindRange(id,key,fmt){ el(id).addEventListener('input',function(){ var p={}; p[key]=parseFloat(el(id).value); change(p); }); }
+  function setSpeed(v){ v=Math.max(10,Math.min(300,v)); change({speed:v}); }
+  bindRange('speed','speed'); bindRange('size','size'); bindRange('hmargin','hmargin');
+  bindRange('vmargin','vmargin'); bindRange('markerPos','markerPos'); bindRange('markerOpacity','markerOpacity');
+  textarea.addEventListener('input', function(){ change({text:textarea.value}); });
+
+  /* ---------- marker color ---------- */
+  var swatchBtns=[].slice.call(document.querySelectorAll('.sw[data-c]'));
+  var customSw=document.querySelector('.sw.custom');
+  function updateSwatchActive(){
+    var match=false;
+    swatchBtns.forEach(function(b){ var on=b.dataset.c.toLowerCase()===String(state.markerColor).toLowerCase(); b.classList.toggle('active',on); if(on) match=true; });
+    customSw.classList.toggle('active',!match);
+  }
+  swatchBtns.forEach(function(b){ b.addEventListener('click',function(){ change({markerColor:b.dataset.c}); }); });
+  el('markerColorCustom').addEventListener('input', function(){ change({markerColor:this.value}); });
+
+  /* ---------- toggles ---------- */
+  el('markerToggle').addEventListener('click', function(){ change({markerOn:!state.markerOn}); });
+  el('mirrorToggle').addEventListener('click', function(){ change({mirror:!state.mirror}); });
+
+  /* ---------- keyboard ---------- */
+  document.addEventListener('keydown', function(e){
+    if(e.target===textarea) return;
+    switch(e.key){
+      case ' ':
+        e.preventDefault();
+        if(role==='controls') change({playing:!state.playing});
+        else if(isPresent()||isPopped()) mainTogglePlay();
+        else startPresentation();
+        break;
+      case 'ArrowUp': e.preventDefault(); setSpeed(state.speed+10); break;
+      case 'ArrowDown': e.preventDefault(); setSpeed(state.speed-10); break;
+      case 'r': case 'R': role==='controls' ? pushCmd('restart') : doRestart(); break;
+      case 'e': case 'E':
+        if(role==='controls') window.close();
+        else if(isPresent()) exitPresent();
+        else if(isPopped()) popIn();
+        break;
+    }
+  });
+  window.addEventListener('resize', function(){ if(role==='main') drawTransform(); });
+
+  /* ---------- init ---------- */
+  if(role==='controls'){
+    body.classList.add('as-controls');
+    syncDOM();
+    if(window.opener) window.opener.postMessage({__tp:1,type:'ready'},'*');
+  } else {
+    syncDOM(); renderPrompter(); requestAnimationFrame(loop);
+  }
+})();
+</script>
+</body>
+</html>
