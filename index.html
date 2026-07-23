@@ -160,12 +160,12 @@
         <textarea id="text" placeholder="Paste your script here…"></textarea>
       </div>
       <div class="divider"></div>
-      <div class="field"><label>Scroll speed <span class="val" id="speedVal">60</span></label><input type="range" id="speed" min="10" max="300" value="60" step="5"></div>
-      <div class="field"><label>Text size <span class="val" id="sizeVal">48 px</span></label><input type="range" id="size" min="20" max="140" value="48" step="1"></div>
-      <div class="field"><label>Left / right margin <span class="val" id="hmarginVal">8 %</span></label><input type="range" id="hmargin" min="0" max="40" value="8" step="1"></div>
-      <div class="field"><label>Top / bottom margin <span class="val" id="vmarginVal">45 %</span></label><input type="range" id="vmargin" min="0" max="90" value="45" step="1"></div>
+      <div class="field"><label>Scroll speed <span class="val" id="speedVal">90</span></label><input type="range" id="speed" min="10" max="300" value="90" step="5"></div>
+      <div class="field"><label>Text size <span class="val" id="sizeVal">73 px</span></label><input type="range" id="size" min="20" max="140" value="73" step="1"></div>
+      <div class="field"><label>Left / right margin <span class="val" id="hmarginVal">28 %</span></label><input type="range" id="hmargin" min="0" max="40" value="28" step="1"></div>
+      <div class="field"><label>Top / bottom margin <span class="val" id="vmarginVal">70 %</span></label><input type="range" id="vmargin" min="0" max="90" value="70" step="1"></div>
       <div class="divider"></div>
-      <div class="field"><label>Lens marker position <span class="val" id="markerPosVal">42 %</span></label><input type="range" id="markerPos" min="5" max="90" value="42" step="1"></div>
+      <div class="field"><label>Lens marker position <span class="val" id="markerPosVal">62 %</span></label><input type="range" id="markerPos" min="5" max="90" value="62" step="1"></div>
       <div class="field">
         <label>Lens marker color</label>
         <div class="swatches" id="swatches">
@@ -178,7 +178,7 @@
           <label class="sw custom" title="Custom color"><input type="color" id="markerColorCustom" value="#F5C542"></label>
         </div>
       </div>
-      <div class="field"><label>Lens marker opacity <span class="val" id="markerOpacityVal">90 %</span></label><input type="range" id="markerOpacity" min="10" max="100" value="90" step="5"></div>
+      <div class="field"><label>Lens marker opacity <span class="val" id="markerOpacityVal">25 %</span></label><input type="range" id="markerOpacity" min="10" max="100" value="25" step="5"></div>
       <div class="field">
         <label>Display</label>
         <div class="toggle-row"><div class="toggle on" id="markerToggle">Lens marker</div><div class="toggle" id="mirrorToggle">Mirror flip</div></div>
@@ -209,11 +209,17 @@
 
   var state = {
     playing:false, pos:0,
-    speed:60, size:48, hmargin:8, vmargin:45,
-    markerPos:42, markerOn:true, mirror:false,
-    markerColor:'#F5C542', markerOpacity:90, text:''
+    speed:90, size:73, hmargin:28, vmargin:70,
+    markerPos:62, markerOn:true, mirror:false,
+    markerColor:'#F5C542', markerOpacity:25, text:''
   };
   var SYNC = ['speed','size','hmargin','vmargin','markerPos','markerOn','mirror','markerColor','markerOpacity','text','playing'];
+
+  /* ---------- persistence (localStorage; no-op if unavailable) ---------- */
+  var STORE='teleprompter.settings.v1';
+  var PERSIST=['speed','size','hmargin','vmargin','markerPos','markerOn','mirror','markerColor','markerOpacity','text'];
+  function saveSettings(){ try{ var o={}; PERSIST.forEach(function(k){ o[k]=state[k]; }); localStorage.setItem(STORE,JSON.stringify(o)); }catch(e){} }
+  function loadSettings(){ try{ var raw=localStorage.getItem(STORE); if(!raw) return; var o=JSON.parse(raw); PERSIST.forEach(function(k){ if(o[k]!==undefined) state[k]=o[k]; }); }catch(e){} }
 
   var controlsWin=null, closePoll=null;
   var PLAY='M8 5v14l11-7z', PAUSE='M6 5h4v14H6zM14 5h4v14h-4z';
@@ -279,13 +285,13 @@
   function change(patch){
     for(var k in patch) state[k]=patch[k];
     syncDOM();
-    if(role==='main'){ renderPrompter(); pushControls(patch); }
+    if(role==='main'){ renderPrompter(); pushControls(patch); saveSettings(); }
     else pushMain(patch);
   }
   function applyIncoming(patch){
     for(var k in patch) state[k]=patch[k];
     syncDOM();
-    if(role==='main') renderPrompter();
+    if(role==='main'){ renderPrompter(); saveSettings(); }
   }
 
   /* ---------- scroll loop (main only) ---------- */
@@ -410,7 +416,7 @@
     syncDOM();
     if(window.opener) window.opener.postMessage({__tp:1,type:'ready'},'*');
   } else {
-    syncDOM(); renderPrompter(); requestAnimationFrame(loop);
+    loadSettings(); syncDOM(); renderPrompter(); requestAnimationFrame(loop);
   }
 })();
 </script>
