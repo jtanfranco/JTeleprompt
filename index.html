@@ -22,7 +22,7 @@
   #app{display:flex;height:100vh;width:100vw}
 
   /* Stage */
-  #stage{position:relative;flex:1;min-width:0;height:100%;overflow:hidden}
+  #stage{position:relative;flex:1;min-width:0;height:100%;overflow:hidden;touch-action:none}
   #scroll{will-change:transform;white-space:pre-wrap;word-wrap:break-word;line-height:1.5;font-weight:600;letter-spacing:.005em}
   #empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--muted);text-align:center;padding:0 32px;pointer-events:none}
   #empty .big{font-size:19px;color:var(--ink);font-weight:600}
@@ -46,6 +46,9 @@
     box-shadow:0 8px 30px rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .25s}
   body.present:not(.ui-hidden) #quickbar{opacity:1;pointer-events:auto}
   body.present.ui-hidden{cursor:none}
+  body.present #stage,body.popped #stage{cursor:grab}
+  body.dragging #stage{cursor:grabbing}
+  body.present.ui-hidden #stage{cursor:none}
 
   .qbtn{display:flex;align-items:center;justify-content:center;height:40px;min-width:40px;padding:0 12px;
     background:var(--panel-2);border:1px solid var(--line);border-radius:10px;color:var(--ink);font-size:13px;font-weight:600;cursor:pointer;user-select:none;transition:background .12s}
@@ -139,6 +142,9 @@
       <button class="qbtn primary" id="qPlay"><svg id="qPlayIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg><span id="qPlayLabel">Pause</span></button>
       <button class="qbtn" id="qRestart" title="Restart (R)"><svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg></button>
       <div class="qsep"></div>
+      <button class="qbtn" id="qUp" title="Line up (PageUp)"><svg viewBox="0 0 24 24"><path d="M12 8l-6 6h12z"/></svg></button>
+      <button class="qbtn" id="qDown" title="Line down (PageDown)"><svg viewBox="0 0 24 24"><path d="M12 16l6-6H6z"/></svg></button>
+      <div class="qsep"></div>
       <button class="qbtn" id="qSlow" title="Slower">–</button>
       <button class="qbtn" id="qFast" title="Faster">+</button>
       <div class="qsep"></div>
@@ -188,8 +194,9 @@
         <div class="toggle-row"><div class="toggle on" id="markerToggle">Lens marker</div><div class="toggle" id="mirrorToggle">Mirror flip</div></div>
       </div>
       <div class="hint">
-        <b>Pop out</b> opens these controls in their own window — put it on a second monitor while the prompter fills the first.<br><br>
+        <b>Reposition while presenting:</b> scroll the wheel or drag the text up/down (or use the ▲ ▼ buttons / <kbd>PgUp</kbd> <kbd>PgDn</kbd>), then play from there. Auto-scroll pauses while you drag.<br><br>
         <kbd>Space</kbd> play / pause &nbsp; <kbd>↑</kbd><kbd>↓</kbd> speed &nbsp; <kbd>R</kbd> restart<br>
+        <b>Pop out</b> opens these controls in their own window for a second monitor.<br>
         <b>Mirror flip</b> is for rigs that reflect the screen off angled glass.
       </div>
     </div>
@@ -241,7 +248,7 @@
     if(role==='main'){
       if(d.type==='ready'){ controlsWin=e.source; pushControls(snapshot()); }
       else if(d.type==='patch'){ applyIncoming(d.patch); }
-      else if(d.type==='cmd'){ if(d.cmd==='restart') doRestart(); else if(d.cmd==='popin') popIn(); }
+      else if(d.type==='cmd'){ if(d.cmd==='restart') doRestart(); else if(d.cmd==='popin') popIn(); else if(d.cmd==='nudgeUp') nudge(-1); else if(d.cmd==='nudgeDown') nudge(1); }
     } else {
       if(d.type==='state'){ applyIncoming(d.state); }
     }
@@ -298,12 +305,17 @@
     if(role==='main'){ renderPrompter(); saveSettings(); }
   }
 
+  /* ---------- manual scrolling ---------- */
+  var dragging=false, dragMoved=0, dragStartY=0, dragStartPos=0, dragPtr=null;
+  function clampPos(v){ return Math.max(0, Math.min(maxScroll(), v)); }
+  function nudge(dir){ state.pos=clampPos(state.pos + dir*state.size*1.5); drawTransform(); }
+
   /* ---------- scroll loop (main only) ---------- */
   var last=null;
   function loop(t){
     if(last===null) last=t;
     var dt=(t-last)/1000; last=t;
-    if(state.playing){
+    if(state.playing && !dragging){
       state.pos += state.speed*dt;
       var m=maxScroll();
       if(state.pos>=m){ state.pos=m; mainSetPlaying(false); showControls(); }
@@ -362,13 +374,51 @@
   el('qEdit').addEventListener('click', exitPresent);
   el('qSlow').addEventListener('click', function(){ setSpeed(state.speed-10); });
   el('qFast').addEventListener('click', function(){ setSpeed(state.speed+10); });
+  el('qUp').addEventListener('click', function(){ nudge(-1); });
+  el('qDown').addEventListener('click', function(){ nudge(1); });
 
+  /* tap toggles play; a drag scrolls instead */
   stage.addEventListener('click', function(e){
     if(role!=='main') return;
+    if(dragMoved>6){ dragMoved=0; return; }
     if(!isPresent() && !isPopped()) return;
     if(e.target.closest('#quickbar')||e.target.closest('#poppedbar')) return;
     mainTogglePlay();
   });
+
+  /* wheel to scroll the prompter */
+  stage.addEventListener('wheel', function(e){
+    if(role!=='main') return;
+    e.preventDefault();
+    state.pos = clampPos(state.pos + e.deltaY);
+    drawTransform();
+    if(isPresent()) showControls();
+  }, {passive:false});
+
+  /* drag to scroll (mouse, touch, pen) */
+  stage.addEventListener('pointerdown', function(e){
+    if(role!=='main') return;
+    if(e.target.closest('#quickbar')||e.target.closest('#poppedbar')) return;
+    dragging=true; dragPtr=e.pointerId; dragStartY=e.clientY; dragStartPos=state.pos; dragMoved=0;
+    body.classList.add('dragging');
+    try{ stage.setPointerCapture(e.pointerId); }catch(_){}
+  });
+  stage.addEventListener('pointermove', function(e){
+    if(!dragging || e.pointerId!==dragPtr) return;
+    var dy=e.clientY-dragStartY;
+    if(Math.abs(dy)>dragMoved) dragMoved=Math.abs(dy);
+    state.pos = clampPos(dragStartPos - dy);
+    drawTransform();
+    if(isPresent()) showControls();
+  });
+  function endDrag(e){
+    if(!dragging) return;
+    dragging=false; body.classList.remove('dragging');
+    try{ stage.releasePointerCapture(dragPtr); }catch(_){}
+    dragPtr=null;
+  }
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
 
   /* ---------- sliders ---------- */
   function bindRange(id,key,fmt){ el(id).addEventListener('input',function(){ var p={}; p[key]=parseFloat(el(id).value); change(p); }); }
@@ -404,6 +454,8 @@
         break;
       case 'ArrowUp': e.preventDefault(); setSpeed(state.speed+10); break;
       case 'ArrowDown': e.preventDefault(); setSpeed(state.speed-10); break;
+      case 'PageUp': e.preventDefault(); role==='controls' ? pushCmd('nudgeUp') : nudge(-1); break;
+      case 'PageDown': e.preventDefault(); role==='controls' ? pushCmd('nudgeDown') : nudge(1); break;
       case 'r': case 'R': role==='controls' ? pushCmd('restart') : doRestart(); break;
       case 'e': case 'E':
         if(role==='controls') window.close();
